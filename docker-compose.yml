@@ -1,0 +1,29 @@
+version: '3.9'
+
+services:
+    app:
+        build: .
+        restart: always
+        entrypoint: scripts/run.sh
+        volumes:
+            - ".:/app"
+            - "/tmp/bridge-bot:/tmp"
+        ports:
+            - "${SERVER_PORT}:${SERVER_PORT}"
+        expose:
+            - "${SERVER_PORT}"
+        depends_on:
+            - mongodb
+        logging:
+            driver: json-file
+            options:
+                max-size: "5m"
+                max-file: "20"
+
+
+    mongodb:
+        image: mongo
+        restart: always
+        command: mongod --port ${MONGODB_PORT}
+        volumes:
+            - "/var/lib/mongodb-bridge-bot:/data/db"
