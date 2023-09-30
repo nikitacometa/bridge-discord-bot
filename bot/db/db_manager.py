@@ -4,8 +4,6 @@ from datetime import datetime
 from pymongo.collection import Collection
 from typing import TypeVar, Generic, Any
 
-# TODO: implement update_by_fields
-
 EntityT = TypeVar('EntityT', bound='BaseEntity')
 
 
@@ -19,6 +17,10 @@ class DbManager(Generic[EntityT]):
     def create(self, item: EntityT) -> EntityT:
         self.collection.insert_one(item.to_dict())
         return item
+
+    def create_with(self, **kwargs) -> EntityT:
+        item = self.elem_type(**kwargs)
+        return self.create(item)
 
     def get_one(self, **kwargs) -> EntityT:
         item_dict = self.collection.find_one(kwargs)
@@ -35,6 +37,12 @@ class DbManager(Generic[EntityT]):
         res = self.get_by_primary_key(item_dict.get(self.primary_key), throw_ex=False)
         if res is None:
             res = self.create(item)
+        return res
+
+    def get_or_create_with(self, **kwargs) -> EntityT:
+        res = self.get_by_primary_key(kwargs.get(self.primary_key), throw_ex=False)
+        if res is None:
+            res = self.create_with(**kwargs)
         return res
 
     def get_many(self, **kwargs) -> list[EntityT]:

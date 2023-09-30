@@ -1,17 +1,13 @@
 version: '3.9'
 
 services:
-    app:
+    bot:
         build: .
         restart: always
         entrypoint: scripts/run.sh
         volumes:
-            - ".:/app"
+            - ".:/bot"
             - "/tmp/bridge-bot:/tmp"
-        ports:
-            - "${SERVER_PORT}:${SERVER_PORT}"
-        expose:
-            - "${SERVER_PORT}"
         depends_on:
             - mongodb
         logging:

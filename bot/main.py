@@ -1,51 +1,79 @@
+import logging
+
 import discord
+from discord import Message
+from discord.abc import GuildChannel
 from discord.ext import commands
-from pymongo import MongoClient
 
-# Replace this with your bot's token and MongoDB URI
-TOKEN = 'your_bot_token'
-MONGO_URI = 'your_mongo_uri'
+from bot import db
+from env import settings
 
-bot = commands.Bot(command_prefix='!')
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Set up the MongoDB client
-client = MongoClient(MONGO_URI)
-db = client['discord_bot_db']
-channels_collection = db['channels']
+logger = logging.getLogger(__name__)
 
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user}')
+    logger.info(f'Logged in as {bot.user}')
 
 
 @bot.event
-async def on_guild_channel_create(channel):
-    # Save the new channel to the database
-    channels_collection.insert_one({'channel_id': channel.id})
+async def on_guild_join(discord_guild: discord.Guild):
+    server = db.servers.get_or_create_with(
+        id=discord_guild.id,
+        name=discord_guild.name
+    )
+    logger.info(f'Joined server {server}')
 
 
 @bot.event
-async def on_message(message):
-    # Ignore messages from the bot itself
+async def on_guild_channel_create(discord_channel: GuildChannel):
+    channel = db.group_channels.get_or_create_with(
+        id=discord_channel.id,
+        name=discord_channel.name,
+        jump_url=discord_channel.jump_url,
+        server_id=discord_channel.guild.id
+    )
+    logger.info(f'Created channel {channel}')
+
+
+def get_user_or_create(discord_user: discord.User) -> db.User:
+    user = db.users.get_by_primary_key(discord_user.id, throw_ex=False)
+    if user is None:
+        user = db.User(
+            id=discord_user.id,
+            name=discord_user.name,
+            display_name=discord_user.display_name,
+            colour=discord_user.colour
+        )
+        db.users.create(user)
+        logger.info(f'Created user {user}')
+    return user
+
+
+@bot.event
+async def on_message(message: Message):
     if message.author == bot.user:
         return
 
-    # Forward the message to all other saved channels
-    saved_channels = channels_collection.find()
-    for saved_channel in saved_channels:
-        channel_id = saved_channel['channel_id']
-        channel = bot.get_channel(channel_id)
+    user = get_user_or_create(message.author)
+    logger.debug(f'User {user} sent message "{message.content}"')
+
+    bridge_channels = db.group_channels.get_all()
+    for channel in bridge_channels:
+        channel = bot.get_channel(channel.id)
         if channel and channel != message.channel:
             embed = discord.Embed(
-                title=f"Message from {message.author} in #{message.channel}",
+                title=f'Message from {message.author} in #{message.channel}',
                 description=message.content,
                 color=discord.Color.blue()
             )
             await channel.send(embed=embed)
 
-    # Process commands after handling the message
     await bot.process_commands(message)
 
 
-bot.run(TOKEN)
+if __name__ == '__main__':
+    bot.run(settings.discord_api_token)

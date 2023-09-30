@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     bot_name: str = 'Bridge'
 
+    discord_api_token: str
+
     mongodb_host: str = 'localhost'
     mongodb_port: int = 27017
 
