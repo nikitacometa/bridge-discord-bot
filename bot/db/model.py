@@ -13,7 +13,6 @@ from bot.util import get_uuid
 class User(BaseEntity['User']):
     name: str
     display_name: str
-    colour: Colour
 
     id: str
     created: datetime = field(default_factory=datetime.utcnow)
@@ -32,8 +31,9 @@ class Server(BaseEntity['Server']):
 
 @dataclass_json
 @dataclass
-class GroupChannel(BaseEntity['GroupChannel']):
+class BridgeChannel(BaseEntity['BridgeChannel']):
     name: str
+    bridge_name: str
     jump_url: str
     server_id: str
 
@@ -47,7 +47,7 @@ class GroupChannel(BaseEntity['GroupChannel']):
 class Bridge(BaseEntity['Bridge']):
     name: str
     creator_id: str
-    channel_ids: list[str] = field(default_factory=list)
+    channel_ids: list[int] = field(default_factory=list)
 
     id: str = field(default_factory=get_uuid)
     created: datetime = field(default_factory=datetime.utcnow)
