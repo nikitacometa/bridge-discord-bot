@@ -48,10 +48,8 @@ class Server(BaseEntity['Server']):
 class BridgeChannel(BaseEntity['BridgeChannel']):
     name: str
     bridge_name: str
-    server_id: str
     server_name: str
     creator_id: str
-    jump_url: str
 
     id: int
     created: datetime = field(default_factory=datetime.utcnow)

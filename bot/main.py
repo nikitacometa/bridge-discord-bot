@@ -2,6 +2,7 @@ import logging
 
 import discord
 from discord.ext import commands
+from discord.ui import Button, View
 
 from bot import db
 from env import settings
@@ -39,10 +40,10 @@ def get_user_or_create(discord_user: discord.User) -> db.User:
     return user
 
 
-# COMMAND HANDLERS
+# COMMON COMMANDS
 
 @bot.command()
-async def get_servers(ctx: commands.Context):
+async def get_bot_servers(ctx: commands.Context):
     servers = db.servers.get_all()
     text = f'In total **{len(servers)} servers.**\n' \
            f'\n'
@@ -50,20 +51,36 @@ async def get_servers(ctx: commands.Context):
     for i, server in enumerate(servers):
         text += f'{i + 1}. {server.name}\n'
 
-    text += f'*!get_server_channels to show channels of **the current server**.*'
     await ctx.send(text)
 
 
 @bot.command()
 async def get_server_channels(ctx: commands.Context):
-    channels = ctx.guild.channels
-    text = f'In total **{len(channels)} channels on {ctx.guild.name}.**\n\n'
+    channels = ctx.guild.text_channels
+
+    text = f'In total **{len(channels)} text channels on {ctx.guild.name}.**\n\n'
     for i, channel in enumerate(channels):
         text += f'{i + 1}. {channel.name}\n'
     text += f'\n' \
             f'*!bridge_add_channel <name> <number> to add to the bridge **<name>**.*'
     await ctx.send(text)
 
+
+@bot.command()
+async def get_bridges(ctx: commands.Context):
+    bridges = db.bridges.get_many(creator_id=ctx.author.id)
+    text = f'In total you created **{len(bridges)} bridges.**\n' \
+           f'\n'
+
+    for i, bridge in enumerate(bridges):
+        text += f'{i + 1}. **{bridge.name}**\n'
+
+    text += f'***!get_bridge <name>** to show bridge channels.*\n' \
+            f'***!create_bridge <name>** to create a new bridge.*'
+    await ctx.send(text)
+
+
+# BRIDGE COMMANDS
 
 @bot.command()
 async def create_bridge(ctx: commands.Context, name: str):
@@ -81,21 +98,8 @@ async def create_bridge(ctx: commands.Context, name: str):
 
     text = f'Congratulations! New bridge **{bridge.name}**.\n' \
            f'\n' \
-           f'*!bridge_add_channel to add the current server channel to the bridge.*'
+           f'***!bridge_add_channel {name}** to add a channel from server **{ctx.guild.name}**.*'
 
-    await ctx.send(text)
-
-
-@bot.command()
-async def get_bridges(ctx: commands.Context):
-    bridges = db.bridges.get_many(creator_id=ctx.author.id)
-    text = f'In total you created **{len(bridges)} bridges.**\n' \
-           f'\n'
-
-    for i, bridge in enumerate(bridges):
-        text += f'{i + 1}. **{bridge.name}**\n'
-
-    text += f'*!get_bridge <name> to show channels of a bridge.*'
     await ctx.send(text)
 
 
@@ -111,27 +115,92 @@ async def get_bridge(ctx: commands.Context, name: str):
         f'{i + 1}. #{bridge_channel.name} from **{bridge_channel.server_name}**'
         for i, bridge_channel in enumerate(bridge_channels)
     ])
-    text = f'Bridge **{bridge.name}** has {len(bridge_channels)} channels:\n' \
+    text = f'Bridge **{bridge.name}** has {len(bridge_channels)} channels.\n' \
            f'\n' \
-           f'{channels_str}'
+           f'{channels_str}' \
+           f'\n' \
+           f'*!bridge_add_channel {bridge.name} to add another.*\n' \
+           f'\n' \
+           f'*!bridge_remove_channel_by_number {bridge.name} <number> to remove.*'
     await ctx.send(text)
 
 
+class ChannelButton(Button):
+    def __init__(self, channel: discord.TextChannel, bridge: db.Bridge, server_name: str, creator_id: int):
+        super().__init__(label=channel.name, style=discord.ButtonStyle.primary)
+        self.channel = channel
+        self.bridge = bridge
+        self.server_name = server_name
+        self.creator_id = creator_id
+
+    async def callback(self, interaction: discord.Interaction):
+        bridge_channel = db.bridge_channels.get_one(id=self.channel.id, bridge_name=self.bridge.name)
+        if bridge_channel is not None:
+            await interaction.response.send_message(
+                f'Oops, channel **{self.channel.name}** already in the bridge **{self.bridge.name}**.'
+            )
+            return
+
+        bridge_channel = db.BridgeChannel(
+            id=self.channel.id,
+            name=self.channel.name,
+            bridge_name=self.bridge.name,
+            creator_id=self.creator_id,
+            server_name=self.server_name
+        )
+        db.bridge_channels.create(bridge_channel)
+        logger.info(f'Created bridge channel: {bridge_channel}')
+
+        self.bridge.channel_ids.append(self.channel.id)
+        db.bridges.update(self.bridge)
+        logger.info(f'Updated bridge: {self.bridge}')
+
+        text = f'Added channel **{self.channel.name}** to bridge {self.bridge.name}.'
+        await interaction.response.send_message(text)
+
+
+class ChannelSelector(View):
+    def __init__(self, channels: list[discord.TextChannel], bridge: db.Bridge, creator_id: int, server_name: str):
+        super().__init__()
+        for channel in channels:
+            self.add_item(
+                ChannelButton(channel=channel, bridge=bridge, creator_id=creator_id, server_name=server_name)
+            )
+
+
 @bot.command()
-async def bridge_add_channel(ctx: commands.Context, name: str, number: int):
+async def bridge_add_channel(ctx: commands.Context, name: str):
     bridge = db.bridges.get_one(name=name)
     if bridge is None:
         await ctx.send(f'Oof, sorry. Bridge {name} not found.')
         return
 
-    channels = ctx.guild.channels
+    channels = ctx.guild.text_channels
+    i = 0
+    while i < len(channels):
+        # max 25 buttons per view
+        chunk_last_idx = min(i + 25, len(channels))
+        view = ChannelSelector(channels[i:chunk_last_idx], bridge, ctx.author.id, ctx.guild.name)
+        await ctx.send(f'Select **{ctx.guild.name}** channel to add to the bridge **{name}**:', view=view)
+        i += 25
+
+
+@bot.command()
+async def bridge_add_channel_by_number(ctx: commands.Context, name: str, number: int):
+    bridge = db.bridges.get_one(name=name)
+    if bridge is None:
+        await ctx.send(f'Oof, sorry. Bridge {name} not found.')
+        return
+
+    channels = ctx.guild.text_channels
     channel = channels[number - 1]
     bridge_channel = db.bridge_channels.get_one(id=channel.id, bridge_name=name)
     if bridge_channel is not None:
         await ctx.send(f'Oops, channel **{channel.name}** already in the bridge **{name}**.')
         return
 
-    bridge_channel = db.BridgeChannel(id=channel.id, name=channel.name, bridge_name=bridge.name, creator_id=ctx.author.id,
+    bridge_channel = db.BridgeChannel(id=channel.id, name=channel.name, bridge_name=bridge.name,
+                                      creator_id=ctx.author.id,
                                       jump_url=channel.jump_url, server_id=ctx.guild.id, server_name=ctx.guild.name)
     db.bridge_channels.create(bridge_channel)
     logger.info(f'Created bridge channel: {bridge_channel}')
@@ -143,6 +212,29 @@ async def bridge_add_channel(ctx: commands.Context, name: str, number: int):
     text = f'Added channel **{channel.name}** to bridge {bridge.name}.\n' \
            f'\n' \
            f'*!bridge_add_channel {bridge.name} <number> to add another.*'
+    await ctx.send(text)
+
+
+@bot.command()
+async def bridge_remove_channel_by_number(ctx: commands.Context, name: str, number: int):
+    bridge = db.bridges.get_one(name=name)
+    if bridge is None:
+        await ctx.send(f'Oof, sorry. Bridge **{name}** not found.')
+        return
+
+    channels = ctx.guild.text_channels
+    channel = channels[number - 1]
+    bridge_channel = db.bridge_channels.get_one(id=channel.id, bridge_name=name)
+    if bridge_channel is None:
+        await ctx.send(f'Oops, channel **{channel.name}** not in the bridge **{name}**.')
+        return
+
+    db.bridge_channels.remove(bridge_channel)
+    bridge.channel_ids.remove(channel.id)
+    db.bridges.update(bridge)
+    logger.info(f'Removed bridge channel: {bridge_channel}')
+
+    text = f'Removed channel **{channel.name}** from bridge **{bridge.name}**.'
     await ctx.send(text)
 
 
@@ -162,33 +254,66 @@ async def on_guild_join(discord_guild: discord.Guild):
     logger.info(f'Joined server {server}')
 
 
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author == bot.user:
+        return
+
+    user = get_user_or_create(message.author)
+    logger.debug(f'User {user.name} sent message:\n{message}')
+
+    if not message_is_command(message):
+        reply_handled = await handle_reply_message(message)
+        if not reply_handled:
+            await handle_bridge_message(message)
+
+    await bot.process_commands(message)
+
+
+# IMPLEMENTATIONS (move to separate files)
+
 def get_user_color(user: discord.User) -> discord.Colour:
     if not user.colour:
         return discord.Colour.green()
     return user.colour
 
 
-async def bridge_forward_message(bridge_name: str, message: discord.Message, channel_id: int):
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        logger.error(f'Channel {channel_id} not found for bridge {bridge_name}')
-
+async def bridge_channel_forward_message(
+        channel: discord.TextChannel,
+        bridge_name: str,
+        message: discord.Message,
+        reference: discord.MessageReference | None = None
+):
     embed = discord.Embed(
         description=message.content,
         color=get_user_color(message.author)
     )
     embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url, url=message.jump_url)
     embed.set_footer(text=f'Server: {message.guild.name}', icon_url=message.guild.icon.url)
-    bot_message = await channel.send(embed=embed)
+    embed.set_thumbnail(url=message.jump_url)
+    bot_message = await channel.send(embed=embed, reference=reference)
     forwarded_message = db.ForwardedMessage(
         id=bot_message.id,
         original_id=message.id,
         original_channel_id=message.channel.id,
-        channel_id=channel_id,
+        channel_id=channel.id,
         bridge_name=bridge_name
     )
     db.forwarded_messages.create(forwarded_message)
     logger.debug(f'Forwarded message {forwarded_message}')
+
+
+async def bridge_forward_message(
+        bridge_name: str,
+        message: discord.Message,
+        channel_id: int,
+        reference: discord.MessageReference | None = None
+):
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        logger.error(f'Channel {channel_id} not found for bridge {bridge_name}')
+
+    await bridge_channel_forward_message(channel, bridge_name, message, reference)
 
 
 async def bridge_send_message(bridge_channel: db.BridgeChannel, message: discord.Message):
@@ -241,47 +366,16 @@ async def handle_reply_message(message: discord.Message) -> bool:
         logger.debug(f'\n\nWTF\nNo forwarded message for reply {message}')
         return False
 
-    original_channel = bot.get_channel(forwarded_message.original_channel_id)
-    if original_channel is None:
-        # exceptional situation, can't be
-        logger.error(f'WTF, original channel {forwarded_message.original_channel_id} for forwarded message {forwarded_message}')
-        return True
-
-    # TODO: improve formatting
-    reply_message = await original_channel.send(
-        content=f'**{message.author}** replied to your message:\n{message.content}',
+    await bridge_forward_message(
+        forwarded_message.bridge_name,
+        message,
+        forwarded_message.original_channel_id,
         reference=discord.MessageReference(
             message_id=forwarded_message.original_id,
             channel_id=forwarded_message.original_channel_id
         )
     )
-    reply_forwarded_message = db.ForwardedMessage(
-        id=reply_message.id,
-        original_id=message.id,
-        original_channel_id=message.channel.id,
-        channel_id=original_channel.id,
-        bridge_name=forwarded_message.bridge_name
-    )
-    db.forwarded_messages.create(reply_forwarded_message)
-    logger.debug(f'Forwarded reply message {reply_forwarded_message} fo {forwarded_message}')
-
     return True
-
-
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author == bot.user:
-        return
-
-    user = get_user_or_create(message.author)
-    logger.debug(f'User {user.name} sent message:\n{message}')
-
-    if not message_is_command(message):
-        reply_handled = await handle_reply_message(message)
-        if not reply_handled:
-            await handle_bridge_message(message)
-
-    await bot.process_commands(message)
 
 
 if __name__ == '__main__':
