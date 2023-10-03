@@ -1,7 +1,6 @@
 import logging
 
 import discord
-from discord import Message
 from discord.ext import commands
 
 from bot import db
@@ -31,7 +30,8 @@ def get_user_or_create(discord_user: discord.User) -> db.User:
         user = db.User(
             id=discord_user.id,
             name=discord_user.name,
-            display_name=discord_user.display_name
+            display_name=discord_user.display_name,
+            colour=db.Colour.from_discord(discord_user.colour)
         )
         db.users.create(user)
         logger.info(f'Created user {user}')
@@ -92,7 +92,7 @@ async def get_bridges(ctx: commands.Context):
            f'\n'
 
     for i, bridge in enumerate(bridges):
-        text += f'{i + 1}. {bridge.name}\n'
+        text += f'{i + 1}. **{bridge.name}**\n'
 
     text += f'*!get_bridge <name> to show channels of a bridge.*'
     await ctx.send(text)
@@ -105,12 +105,12 @@ async def get_bridge(ctx: commands.Context, name: str):
         await ctx.send(f'So sorry, but... Bridge {name} not found.')
         return
 
-    bridge_channels = db.bridge_channels.get_many(bridge_id=bridge.id)
+    bridge_channels = db.bridge_channels.get_many(bridge_name=bridge.name)
     channels_str = '\n'.join([
-        f'{i + 1}. {bridge_channel.name} from {bridge_channel.server_name}'
+        f'{i + 1}. #{bridge_channel.name} from **{bridge_channel.server_name}**'
         for i, bridge_channel in enumerate(bridge_channels)
     ])
-    text = f'Bridge {bridge.name} has {len(bridge_channels)} channels:\n' \
+    text = f'Bridge **{bridge.name}** has {len(bridge_channels)} channels:\n' \
            f'\n' \
            f'{channels_str}'
     await ctx.send(text)
@@ -161,8 +161,53 @@ async def on_guild_join(discord_guild: discord.Guild):
     logger.info(f'Joined server {server}')
 
 
+async def bridge_send_message(bridge_channel: db.BridgeChannel, message: discord.Message):
+    bridge = db.bridges.get_one(name=bridge_channel.bridge_name)
+    if bridge is None:
+        logger.error(f'Bridge {bridge_channel.bridge_name} not found for channel {bridge_channel.id}')
+        return
+    if len(bridge.channel_ids) <= 1:
+        logger.warning(f'Bridge {bridge_channel.bridge_name} has only one channel, nowhere to forward.')
+        return
+
+    bridge_message = db.BridgeMessage(
+        id=message.id,
+        text=message.content,
+        author_id=message.author.id,
+        channel_id=message.channel.id,
+        bridge_name=bridge.name
+    )
+    db.bridge_messages.create(bridge_message)
+    logger.debug(f'Forwarding message {bridge_message} to bridge {bridge}')
+
+    for channel_id in bridge.channel_ids:
+        if channel_id == bridge_channel.id:
+            # skip current channel
+            continue
+
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            logger.error(f'Channel {channel_id} not found for bridge {bridge}')
+
+        embed = discord.Embed(
+            title=f'Message from {message.author} in #{message.channel}',
+            description=message.content,
+            color=discord.Color.blue()
+        )
+        bot_message = await channel.send(embed=embed)
+        forwarded_message = db.ForwardedMessage(
+            id=bot_message.id,
+            original_id=bridge_message.id,
+            original_channel_id=bridge_message.channel_id,
+            channel_id=channel_id,
+            bridge_name=bridge.name
+        )
+        db.forwarded_messages.create(forwarded_message)
+        logger.debug(f'Forwarded message {forwarded_message}')
+
+
 @bot.event
-async def on_message(message: Message):
+async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
 
@@ -171,27 +216,7 @@ async def on_message(message: Message):
 
     bridge_channels = db.bridge_channels.get_many(id=message.channel.id)
     for bridge_channel in bridge_channels:
-        bridge = db.bridges.get_one(name=bridge_channel.bridge_name)
-        if bridge is None:
-            logger.error(f'Bridge {bridge_channel.bridge_name} not found for channel {bridge_channel.id}')
-            continue
-
-        logger.debug(f'{bridge_channel.id} channel has bridge {bridge}')
-        for channel_id in bridge.channel_ids:
-            if channel_id == bridge_channel.id:
-                # skip current channel
-                continue
-
-            channel = bot.get_channel(channel_id)
-            if channel:
-                embed = discord.Embed(
-                    title=f'Message from {message.author} in #{message.channel}',
-                    description=message.content,
-                    color=discord.Color.blue()
-                )
-                await channel.send(embed=embed)
-            else:
-                logger.error(f'Channel {channel_id} not found for bridge {bridge}')
+        await bridge_send_message(bridge_channel, message)
 
     await bot.process_commands(message)
 
