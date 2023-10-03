@@ -14,6 +14,7 @@ logging.basicConfig(
     level=settings.log_level
 )
 logging.getLogger('discord').setLevel(settings.log_level)
+logging.getLogger('discord.client').setLevel(logging.INFO)
 logging.getLogger('discord.http').setLevel(logging.INFO)
 logging.getLogger('discord.gateway').setLevel(logging.INFO)
 
@@ -178,7 +179,7 @@ async def bridge_send_message(bridge_channel: db.BridgeChannel, message: discord
         bridge_name=bridge.name
     )
     db.bridge_messages.create(bridge_message)
-    logger.debug(f'Forwarding message {bridge_message} to bridge {bridge}')
+    logger.debug(f'Forwarding message {bridge_message.id} to bridge {bridge.name}')
 
     for channel_id in bridge.channel_ids:
         if channel_id == bridge_channel.id:
@@ -206,6 +207,56 @@ async def bridge_send_message(bridge_channel: db.BridgeChannel, message: discord
         logger.debug(f'Forwarded message {forwarded_message}')
 
 
+def message_is_command(message: discord.Message) -> bool:
+    return message.content is not None and message.content.startswith('!')
+
+
+async def handle_bridge_message(message: discord.Message):
+    bridge_channels = db.bridge_channels.get_many(id=message.channel.id)
+    if len(bridge_channels) == 0:
+        return
+
+    for bridge_channel in bridge_channels:
+        await bridge_send_message(bridge_channel, message)
+
+
+async def handle_reply_message(message: discord.Message) -> bool:
+    if message.reference is None:
+        return False
+
+    forwarded_message = db.forwarded_messages.get_one(id=message.reference.message_id)
+    if forwarded_message is None:
+        # has reply but not to bridge message
+        logger.debug(f'\n\nWTF\nNo forwarded message for reply {message}')
+        return False
+
+    original_channel = bot.get_channel(forwarded_message.original_channel_id)
+    if original_channel is None:
+        # exceptional situation, can't be
+        logger.error(f'WTF, original channel {forwarded_message.original_channel_id} for forwarded message {forwarded_message}')
+        return True
+
+    # TODO: improve formatting
+    reply_message = await original_channel.send(
+        content=f'**{message.author}** replied to your message:\n{message.content}',
+        reference=discord.MessageReference(
+            message_id=forwarded_message.original_id,
+            channel_id=forwarded_message.original_channel_id
+        )
+    )
+    reply_forwarded_message = db.ForwardedMessage(
+        id=reply_message.id,
+        original_id=message.id,
+        original_channel_id=message.channel.id,
+        channel_id=original_channel.id,
+        bridge_name=forwarded_message.bridge_name
+    )
+    db.forwarded_messages.create(reply_forwarded_message)
+    logger.debug(f'Forwarded reply message {reply_forwarded_message} fo {forwarded_message}')
+
+    return True
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author == bot.user:
@@ -214,9 +265,10 @@ async def on_message(message: discord.Message):
     user = get_user_or_create(message.author)
     logger.debug(f'User {user.name} sent message:\n{message}')
 
-    bridge_channels = db.bridge_channels.get_many(id=message.channel.id)
-    for bridge_channel in bridge_channels:
-        await bridge_send_message(bridge_channel, message)
+    if not message_is_command(message):
+        reply_handled = await handle_reply_message(message)
+        if not reply_handled:
+            await handle_bridge_message(message)
 
     await bot.process_commands(message)
 
