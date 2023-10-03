@@ -162,6 +162,35 @@ async def on_guild_join(discord_guild: discord.Guild):
     logger.info(f'Joined server {server}')
 
 
+def get_user_color(user: discord.User) -> discord.Colour:
+    if not user.colour:
+        return discord.Colour.green()
+    return user.colour
+
+
+async def bridge_forward_message(bridge_name: str, message: discord.Message, channel_id: int):
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        logger.error(f'Channel {channel_id} not found for bridge {bridge_name}')
+
+    embed = discord.Embed(
+        description=message.content,
+        color=get_user_color(message.author)
+    )
+    embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url, url=message.jump_url)
+    embed.set_footer(text=f'Server: {message.guild.name}', icon_url=message.guild.icon.url)
+    bot_message = await channel.send(embed=embed)
+    forwarded_message = db.ForwardedMessage(
+        id=bot_message.id,
+        original_id=message.id,
+        original_channel_id=message.channel.id,
+        channel_id=channel_id,
+        bridge_name=bridge_name
+    )
+    db.forwarded_messages.create(forwarded_message)
+    logger.debug(f'Forwarded message {forwarded_message}')
+
+
 async def bridge_send_message(bridge_channel: db.BridgeChannel, message: discord.Message):
     bridge = db.bridges.get_one(name=bridge_channel.bridge_name)
     if bridge is None:
@@ -186,25 +215,7 @@ async def bridge_send_message(bridge_channel: db.BridgeChannel, message: discord
             # skip current channel
             continue
 
-        channel = bot.get_channel(channel_id)
-        if channel is None:
-            logger.error(f'Channel {channel_id} not found for bridge {bridge}')
-
-        embed = discord.Embed(
-            title=f'Message from {message.author} in #{message.channel}',
-            description=message.content,
-            color=discord.Color.blue()
-        )
-        bot_message = await channel.send(embed=embed)
-        forwarded_message = db.ForwardedMessage(
-            id=bot_message.id,
-            original_id=bridge_message.id,
-            original_channel_id=bridge_message.channel_id,
-            channel_id=channel_id,
-            bridge_name=bridge.name
-        )
-        db.forwarded_messages.create(forwarded_message)
-        logger.debug(f'Forwarded message {forwarded_message}')
+        await bridge_forward_message(bridge.name, message, channel_id)
 
 
 def message_is_command(message: discord.Message) -> bool:
