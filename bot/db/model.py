@@ -2,10 +2,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from dataclasses_json import dataclass_json
-from discord import Colour
 
 from bot.db import BaseEntity
 from bot.util import get_uuid
+
+
+@dataclass_json
+@dataclass
+class Colour:
+    value: int
 
 
 @dataclass_json
@@ -34,8 +39,10 @@ class Server(BaseEntity['Server']):
 class BridgeChannel(BaseEntity['BridgeChannel']):
     name: str
     bridge_name: str
-    jump_url: str
     server_id: str
+    server_name: str
+    creator_id: str
+    jump_url: str
 
     id: int
     created: datetime = field(default_factory=datetime.utcnow)

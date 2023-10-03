@@ -22,7 +22,7 @@ class DbManager(Generic[EntityT]):
         item = self.elem_type(**kwargs)
         return self.create(item)
 
-    def get_one(self, **kwargs) -> EntityT:
+    def get_one(self, **kwargs) -> EntityT | None:
         item_dict = self.collection.find_one(kwargs)
         return self.from_dict(item_dict)
 
@@ -75,15 +75,16 @@ class DbManager(Generic[EntityT]):
         )
         return self.from_dict(item_dict)
 
-    def remove(self, item: EntityT):
+    def remove(self, item: EntityT) -> None:
         item_dict = item.to_dict()
-        return self.collection.delete_one(
+        self.collection.delete_one(
             {self.primary_key: item_dict.get(self.primary_key)}
         )
+        return None
 
     def remove_by(self, **kwargs) -> int:
         res = self.collection.delete_many(kwargs)
         return res.deleted_count
 
-    def from_dict(self, item_dict: dict | None = None) -> EntityT:
+    def from_dict(self, item_dict: dict | None = None) -> EntityT | None:
         return self.elem_type.from_dict(item_dict) if item_dict is not None else None
