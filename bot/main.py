@@ -43,18 +43,6 @@ def get_user_or_create(discord_user: discord.User) -> db.User:
 # COMMON COMMANDS
 
 @bot.command()
-async def get_bot_servers(ctx: commands.Context):
-    servers = db.servers.get_all()
-    text = f'In total **{len(servers)} servers.**\n' \
-           f'\n'
-
-    for i, server in enumerate(servers):
-        text += f'{i + 1}. {server.name}\n'
-
-    await ctx.send(text)
-
-
-@bot.command()
 async def get_server_channels(ctx: commands.Context):
     channels = ctx.guild.text_channels
 
@@ -67,7 +55,7 @@ async def get_server_channels(ctx: commands.Context):
 
 
 @bot.command()
-async def get_bridges(ctx: commands.Context):
+async def get_my_bridges(ctx: commands.Context):
     bridges = db.bridges.get_many(creator_id=ctx.author.id)
     text = f'In total you created **{len(bridges)} bridges.**\n' \
            f'\n'
@@ -83,31 +71,31 @@ async def get_bridges(ctx: commands.Context):
 # BRIDGE COMMANDS
 
 @bot.command()
-async def create_bridge(ctx: commands.Context, name: str):
+async def create_bridge(ctx: commands.Context, bridge_name: str):
     creator = get_user_or_create(ctx.author)
-    bridge = db.bridges.get_one(name=name)
+    bridge = db.bridges.get_one(name=bridge_name)
     if bridge is not None:
-        await ctx.send(f'Sorry, bridge **{name}** already exists. Please try different name.')
+        await ctx.send(f'Sorry, bridge **{bridge_name}** already exists. Please try different name.')
         return
 
     bridge = db.bridges.create(db.Bridge(
-        name=name,
+        name=bridge_name,
         creator_id=creator.id
     ))
     logger.info(f'Created bridge {bridge}')
 
     text = f'Congratulations! New bridge **{bridge.name}**.\n' \
            f'\n' \
-           f'***!bridge_add_channel {name}** to add a channel from server **{ctx.guild.name}**.*'
+           f'***!bridge_add_channel {bridge_name}** to add a channel from server **{ctx.guild.name}**.*'
 
     await ctx.send(text)
 
 
 @bot.command()
-async def get_bridge(ctx: commands.Context, name: str):
-    bridge = db.bridges.get_one(name=name)
+async def get_bridge(ctx: commands.Context, bridge_name: str):
+    bridge = db.bridges.get_one(name=bridge_name)
     if bridge is None:
-        await ctx.send(f'So sorry, but... Bridge {name} not found.')
+        await ctx.send(f'So sorry, but... Bridge {bridge_name} not found.')
         return
 
     bridge_channels = db.bridge_channels.get_many(bridge_name=bridge.name)
@@ -168,10 +156,10 @@ class ChannelSelector(View):
 
 
 @bot.command()
-async def bridge_add_channel(ctx: commands.Context, name: str):
-    bridge = db.bridges.get_one(name=name)
+async def bridge_add_channel(ctx: commands.Context, bridge_name: str):
+    bridge = db.bridges.get_one(name=bridge_name)
     if bridge is None:
-        await ctx.send(f'Oof, sorry. Bridge {name} not found.')
+        await ctx.send(f'Oof, sorry. Bridge {bridge_name} not found.')
         return
 
     channels = ctx.guild.text_channels
@@ -180,7 +168,7 @@ async def bridge_add_channel(ctx: commands.Context, name: str):
         # max 25 buttons per view
         chunk_last_idx = min(i + 25, len(channels))
         view = ChannelSelector(channels[i:chunk_last_idx], bridge, ctx.author.id, ctx.guild.name)
-        await ctx.send(f'Select **{ctx.guild.name}** channel to add to the bridge **{name}**:', view=view)
+        await ctx.send(f'Select **{ctx.guild.name}** channel to add to the bridge **{bridge_name}**:', view=view)
         i += 25
 
 
@@ -215,17 +203,17 @@ async def bridge_add_channel_by_number(ctx: commands.Context, name: str, number:
 
 
 @bot.command()
-async def bridge_remove_channel_by_number(ctx: commands.Context, name: str, number: int):
-    bridge = db.bridges.get_one(name=name)
+async def bridge_remove_channel_by_number(ctx: commands.Context, bridge_name: str, number: int):
+    bridge = db.bridges.get_one(name=bridge_name)
     if bridge is None:
-        await ctx.send(f'Oof, sorry. Bridge **{name}** not found.')
+        await ctx.send(f'Oof, sorry. Bridge **{bridge_name}** not found.')
         return
 
     channels = ctx.guild.text_channels
     channel = channels[number - 1]
-    bridge_channel = db.bridge_channels.get_one(id=channel.id, bridge_name=name)
+    bridge_channel = db.bridge_channels.get_one(id=channel.id, bridge_name=bridge_name)
     if bridge_channel is None:
-        await ctx.send(f'Oops, channel **{channel.name}** not in the bridge **{name}**.')
+        await ctx.send(f'Oops, channel **{channel.name}** not in the bridge **{bridge_name}**.')
         return
 
     db.bridge_channels.remove(bridge_channel)
@@ -362,7 +350,6 @@ async def handle_reply_message(message: discord.Message) -> bool:
     forwarded_message = db.forwarded_messages.get_one(id=message.reference.message_id)
     if forwarded_message is None:
         # has reply but not to bridge message
-        logger.debug(f'\n\nWTF\nNo forwarded message for reply {message}')
         return False
 
     await bridge_forward_message(
