@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 dataclasses-json = "*"
 discord = "*"
+discord-py-interactions = "*"
 pydantic = "*"
 pydantic-settings = "*"
 pymongo = "*"

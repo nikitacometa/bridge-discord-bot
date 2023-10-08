@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='/', intents=intents)
 
 
 def get_user_or_create(discord_user: discord.User) -> db.User:
@@ -117,10 +117,9 @@ async def get_bridge(ctx: commands.Context, name: str):
     ])
     text = f'Bridge **{bridge.name}** has {len(bridge_channels)} channels.\n' \
            f'\n' \
-           f'{channels_str}' \
+           f'{channels_str}\n' \
            f'\n' \
            f'*!bridge_add_channel {bridge.name} to add another.*\n' \
-           f'\n' \
            f'*!bridge_remove_channel_by_number {bridge.name} <number> to remove.*'
     await ctx.send(text)
 
