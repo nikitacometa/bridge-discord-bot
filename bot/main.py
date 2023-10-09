@@ -1,3 +1,4 @@
+import enum
 import logging
 
 import discord
@@ -73,11 +74,9 @@ async def create_bridge(ctx: commands.Context, bridge_name: str):
     ))
     logger.info(f'Created bridge {bridge}')
 
-    text = f'✅ Congratulations! New bridge **{bridge.name}**.\n' \
-           f'\n' \
-           f'***{COMMAND_PREFIX}add_channel_to_bridge {bridge_name}** to add a channel from server **{ctx.guild.name}**.*'
-
-    await ctx.send(text)
+    text = f'✅ Congratulations! New bridge **{bridge.name}**.'
+    view = BridgeActionsSelector(bridge)
+    await ctx.send(text, view=view)
 
 
 @bot.command()
@@ -89,16 +88,49 @@ async def show_bridge(ctx: commands.Context, bridge_name: str):
 
     bridge_channels = db.bridge_channels.get_many(bridge_name=bridge.name)
     channels_str = '\n'.join([
-        f'{i + 1}. #{bridge_channel.name} from **{bridge_channel.server_name}**'
+        f'{i + 1}. **#{bridge_channel.name}::{bridge_channel.server_name}**'
         for i, bridge_channel in enumerate(bridge_channels)
     ])
     text = f'💡 Bridge **{bridge.name}** has {len(bridge_channels)} channels.\n' \
            f'\n' \
-           f'{channels_str}\n' \
-           f'\n' \
-           f'*{COMMAND_PREFIX}add_channel_to_bridge {bridge.name} to add another.*\n' \
-           f'*{COMMAND_PREFIX}remove_channel_from_bridge {bridge.name} to remove.*'
-    await ctx.send(text)
+           f'{channels_str}'
+    view = BridgeActionsSelector(bridge)
+    await ctx.send(text, view=view)
+
+
+class BridgeAction(str, enum.Enum):
+    ADD_CHANNEL = 'Add Channel'
+    REMOVE_CHANNEL = 'Remove Channel'
+
+
+class UpdateBridgeButton(Button):
+    def __init__(self, bridge: db.Bridge, bridge_action: BridgeAction):
+        super().__init__(label=bridge_action, style=discord.ButtonStyle.primary)
+        self.bridge = bridge
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.label == BridgeAction.ADD_CHANNEL:
+            await add_channel_to_bridge_internal(
+                self.bridge.name,
+                interaction.guild,
+                interaction.user.id,
+                interaction.response.send_message
+            )
+        elif self.label == BridgeAction.REMOVE_CHANNEL:
+            await remove_channel_from_bridge_internal(
+                self.bridge.name,
+                interaction.user.id,
+                interaction.response.send_message
+            )
+        else:
+            logger.error(f'Unknown bridge action: {self.label}')
+
+
+class BridgeActionsSelector(View):
+    def __init__(self, bridge: db.Bridge):
+        super().__init__()
+        self.add_item(UpdateBridgeButton(bridge=bridge, bridge_action=BridgeAction.ADD_CHANNEL))
+        self.add_item(UpdateBridgeButton(bridge=bridge, bridge_action=BridgeAction.REMOVE_CHANNEL))
 
 
 # BRIDGE ADD
@@ -133,7 +165,7 @@ class AddChannelButton(Button):
         db.bridges.update(self.bridge)
         logger.info(f'Updated bridge: {self.bridge}')
 
-        text = f'✅ Added channel **{self.channel.name}** to bridge {self.bridge.name}.'
+        text = f'✅ Added channel **{self.channel.name}** to bridge **{self.bridge.name}**.'
         await interaction.response.send_message(text)
 
 
@@ -148,18 +180,22 @@ class AddChannelSelector(View):
 
 @bot.command()
 async def add_channel_to_bridge(ctx: commands.Context, bridge_name: str):
+    return await add_channel_to_bridge_internal(bridge_name, ctx.guild, ctx.author.id, ctx.send)
+
+
+async def add_channel_to_bridge_internal(bridge_name: str, guild: discord.Guild, creator_id: int, send_func: callable):
     bridge = db.bridges.get_one(name=bridge_name)
     if bridge is None:
-        await ctx.send(f'Oof, sorry. Bridge {bridge_name} not found.')
+        await send_func(f'Oof, sorry. Bridge {bridge_name} not found.')
         return
 
-    channels = ctx.guild.text_channels
+    channels = guild.text_channels
     i = 0
     while i < len(channels):
         # max 25 buttons per view
         chunk_last_idx = min(i + 25, len(channels))
-        view = AddChannelSelector(channels[i:chunk_last_idx], bridge, ctx.author.id, ctx.guild.name)
-        await ctx.send(f'👇 Select **{ctx.guild.name}** channel to add to the bridge **{bridge_name}**:', view=view)
+        view = AddChannelSelector(channels[i:chunk_last_idx], bridge, creator_id, guild.name)
+        await send_func(f'👇 Select **{guild.name}** channel to add to the bridge **{bridge_name}**.', view=view)
         i += 25
 
 
@@ -167,7 +203,7 @@ async def add_channel_to_bridge(ctx: commands.Context, bridge_name: str):
 
 class RemoveChannelButton(Button):
     def __init__(self, bridge_channel: db.BridgeChannel, bridge: db.Bridge):
-        super().__init__(label=f'#{bridge_channel.name}:{bridge_channel.server_name}', style=discord.ButtonStyle.primary)
+        super().__init__(label=f'#{bridge_channel.name}::{bridge_channel.server_name}', style=discord.ButtonStyle.primary)
         self.bridge_channel = bridge_channel
         self.bridge = bridge
 
@@ -193,17 +229,21 @@ class RemoveChannelSelector(View):
 
 @bot.command()
 async def remove_channel_from_bridge(ctx: commands.Context, bridge_name: str):
+    return await remove_channel_from_bridge_internal(bridge_name, ctx.author.id, ctx.send)
+
+
+async def remove_channel_from_bridge_internal(bridge_name: str, creator_id: int, send_func: callable):
     bridge = db.bridges.get_one(name=bridge_name)
     if bridge is None:
-        await ctx.send(f'Oof, sorry. Bridge {bridge_name} not found.')
+        await send_func(f'Oof, sorry. Bridge {bridge_name} not found.')
         return
-    if bridge.creator_id != ctx.author.id:
-        await ctx.send(f'Sorry, only bridge creator can remove channels.')
+    if bridge.creator_id != creator_id:
+        await send_func(f'Sorry, only bridge creator can remove channels.')
         return
 
     bridge_channels = db.bridge_channels.get_many(bridge_name=bridge.name)
     if len(bridge_channels) == 0:
-        await ctx.send(f'Oops, bridge **{bridge.name}** has no channels.')
+        await send_func(f'Oops, bridge **{bridge.name}** has no channels.')
         return
 
     i = 0
@@ -211,7 +251,7 @@ async def remove_channel_from_bridge(ctx: commands.Context, bridge_name: str):
         # max 25 buttons per view
         chunk_last_idx = min(i + 25, len(bridge_channels))
         view = RemoveChannelSelector(bridge_channels[i:chunk_last_idx], bridge)
-        await ctx.send(f'👇 Choose channel to remove from the bridge **{bridge_name}**:', view=view)
+        await send_func(f'👇 Choose channel to remove from the bridge **{bridge_name}**.', view=view)
         i += 25
 
 
