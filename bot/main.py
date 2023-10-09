@@ -28,6 +28,18 @@ COMMAND_PREFIX = '/'
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 
+async def check_user_manager(ctx: commands.Context) -> None:
+    if ctx.author.name not in settings.manager_usernames:
+        await ctx.send(f'✅ To get access to **{settings.display_name}**, DM @nikitacometa.')
+        raise commands.CommandError(f'User {ctx.author.name} is not a manager.')
+
+
+async def check_user_manager_interaction(interaction: discord.Interaction) -> None:
+    if interaction.user.name not in settings.manager_usernames:
+        await interaction.response.send_message(f'✅ To get access to **{settings.display_name}**, DM @nikitacometa.')
+        raise commands.CommandError(f'User {interaction.user.name} is not a manager.')
+
+
 def get_user_or_create(discord_user: discord.User) -> db.User:
     user = db.users.get_by_primary_key(discord_user.id, throw_ex=False)
     if user is None:
@@ -45,7 +57,9 @@ def get_user_or_create(discord_user: discord.User) -> db.User:
 # BRIDGE MANAGEMENT
 
 @bot.command()
-async def show_my_bridges(ctx: commands.Context):
+async def my_bridges(ctx: commands.Context):
+    await check_user_manager(ctx)
+
     bridges = db.bridges.get_many(creator_id=ctx.author.id)
     text = f'🤝 You created **{len(bridges)} bridges.**\n' \
            f'\n'
@@ -53,7 +67,8 @@ async def show_my_bridges(ctx: commands.Context):
     for i, bridge in enumerate(bridges):
         text += f'{i + 1}. **{bridge.name}**\n'
 
-    text += f'***{COMMAND_PREFIX}show_bridge <name>** to show bridge channels.*\n' \
+    text += f'\n' \
+            f'***{COMMAND_PREFIX}manage_bridge <name>** to manage the bridge.*\n' \
             f'***{COMMAND_PREFIX}create_bridge <name>** to create a new bridge.*'
     await ctx.send(text)
 
@@ -62,6 +77,8 @@ async def show_my_bridges(ctx: commands.Context):
 
 @bot.command()
 async def create_bridge(ctx: commands.Context, bridge_name: str):
+    await check_user_manager(ctx)
+
     creator = get_user_or_create(ctx.author)
     bridge = db.bridges.get_one(name=bridge_name)
     if bridge is not None:
@@ -80,7 +97,9 @@ async def create_bridge(ctx: commands.Context, bridge_name: str):
 
 
 @bot.command()
-async def show_bridge(ctx: commands.Context, bridge_name: str):
+async def manage_bridge(ctx: commands.Context, bridge_name: str):
+    await check_user_manager(ctx)
+
     bridge = db.bridges.get_one(name=bridge_name)
     if bridge is None:
         await ctx.send(f'So sorry, but... Bridge {bridge_name} not found.')
@@ -88,7 +107,7 @@ async def show_bridge(ctx: commands.Context, bridge_name: str):
 
     bridge_channels = db.bridge_channels.get_many(bridge_name=bridge.name)
     channels_str = '\n'.join([
-        f'{i + 1}. **#{bridge_channel.name}::{bridge_channel.server_name}**'
+        f'{i + 1}. **#{bridge_channel.name}** from **{bridge_channel.server_name}**'
         for i, bridge_channel in enumerate(bridge_channels)
     ])
     text = f'💡 Bridge **{bridge.name}** has {len(bridge_channels)} channels.\n' \
@@ -109,6 +128,8 @@ class UpdateBridgeButton(Button):
         self.bridge = bridge
 
     async def callback(self, interaction: discord.Interaction):
+        await check_user_manager_interaction(interaction)
+
         if self.label == BridgeAction.ADD_CHANNEL:
             await add_channel_to_bridge_internal(
                 self.bridge.name,
@@ -144,6 +165,8 @@ class AddChannelButton(Button):
         self.creator_id = creator_id
 
     async def callback(self, interaction: discord.Interaction):
+        await check_user_manager_interaction(interaction)
+
         bridge_channel = db.bridge_channels.get_one(id=self.channel.id, bridge_name=self.bridge.name)
         if bridge_channel is not None:
             await interaction.response.send_message(
@@ -180,6 +203,7 @@ class AddChannelSelector(View):
 
 @bot.command()
 async def add_channel_to_bridge(ctx: commands.Context, bridge_name: str):
+    await check_user_manager(ctx)
     return await add_channel_to_bridge_internal(bridge_name, ctx.guild, ctx.author.id, ctx.send)
 
 
@@ -208,6 +232,8 @@ class RemoveChannelButton(Button):
         self.bridge = bridge
 
     async def callback(self, interaction: discord.Interaction):
+        await check_user_manager_interaction(interaction)
+
         db.bridge_channels.remove_by(id=self.bridge_channel.id, bridge_name=self.bridge.name)
 
         self.bridge.channel_ids.remove(self.bridge_channel.id)
@@ -229,6 +255,7 @@ class RemoveChannelSelector(View):
 
 @bot.command()
 async def remove_channel_from_bridge(ctx: commands.Context, bridge_name: str):
+    await check_user_manager(ctx)
     return await remove_channel_from_bridge_internal(bridge_name, ctx.author.id, ctx.send)
 
 
